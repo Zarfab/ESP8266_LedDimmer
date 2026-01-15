@@ -1,3 +1,5 @@
+#include "WifiCredentials.h"
+
 #include <EEPROM.h>
 #include <MedianFilter.h>
 
