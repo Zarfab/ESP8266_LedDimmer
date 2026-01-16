@@ -1,7 +1,25 @@
+#define USE_OTA false
+#define USE_SERIAL true
+
 #include "WifiCredentials.h"
+#include <ESP8266WiFi.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ESP8266mDNS.h>
+#if USE_OTA 
+  #include <ArduinoOTA.h>
+#endif
+#include <FS.h>          // SPIFFS
+
+AsyncWebServer server(80);
 
 #include <EEPROM.h>
 #include <MedianFilter.h>
+
+#define MDNS_NAME "eclairage-sdb"
+#define WIFI_RETRY_INTERVAL 10000 // ms
+const char* ssid = WIFI_SSID;
+const char* pwd = WIFI_PASS;
 
 #define EEPROM_SIZE 8
 #define EEPROM_ADDR 0
@@ -13,7 +31,6 @@
 #define PWM_RANGE 2048
 #define PWM_VAR 0.08
 
-#define USE_SERIAL true
 
 #define BTN_LONG_PRESS 5000 // in ms
 #define BTN_SHORT_PRESS 1000 // in ms
@@ -21,7 +38,7 @@
 float pwm = 0;
 int lastA;
 
-MedianFilter buttonFilter(45, HIGH);
+MedianFilter buttonFilter(5, HIGH);
 int lastBtn;
 bool shortPressDone = false;
 bool longPressDone = false;
@@ -43,6 +60,167 @@ void setLedValue(float val) {
     analogWrite(LED, int(val));
   #endif
 }
+
+
+bool wifiConnected = false;
+bool wifiConnecting = false;
+bool mdnsStarted = false;
+bool otaEnabled = false;
+bool serverStarted = false;
+const char * filesToCheck[] = {"/index.html", "/script.js", "/style.css"};
+
+uint32_t lastWifiAttempt = 0;
+uint32_t wifiConnectingT0 = 0;
+
+
+void handleWifi(bool force = false) {
+  if (wifiConnected)
+    return;
+
+  if(wifiConnecting && millis() - wifiConnectingT0 > 500) {
+    if(WiFi.status() != WL_CONNECTED) {
+      #if USE_SERIAL
+        Serial.print(".");
+      #endif
+      wifiConnectingT0 = millis();
+      return;
+    }
+  }
+
+  if (!wifiConnecting && (force || millis() - lastWifiAttempt > WIFI_RETRY_INTERVAL)) {
+    #if USE_SERIAL
+      Serial.print("Connect to Wifi : ");
+      Serial.println(ssid);
+    #endif
+    lastWifiAttempt = millis();
+    wifiConnecting = true;
+    wifiConnectingT0 = millis();
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pwd);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    wifiConnecting = false;
+
+    #if USE_SERIAL
+      Serial.print("\nConnected, IP: ");
+      Serial.println(WiFi.localIP());
+    #endif
+
+    mdnsStarted = MDNS.begin(MDNS_NAME);
+    #if USE_SERIAL
+      if (mdnsStarted) {
+        Serial.println("mDNS démarré : http://" + String(MDNS_NAME) + ".local");
+      } else {
+        Serial.println("Erreur démarrage mDNS");
+      }
+    #endif
+    if(mdnsStarted) {
+      MDNS.addService("http", "tcp", 80);
+    }
+
+    if (!serverStarted) {
+      server.begin();
+      serverStarted = true;
+      #if USE_SERIAL
+        Serial.println("Async WebServer started");
+      #endif
+    }
+  }
+}
+
+void setupWebServer() {
+
+  // Page principale
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(SPIFFS, "/index.html", "text/html");
+  });
+
+  // Fichiers statiques
+  server.serveStatic("/script.js", SPIFFS, "/script.js");
+  server.serveStatic("/style.css", SPIFFS, "/style.css");
+
+  // API GET PWM
+  server.on("/api/pwm", HTTP_GET, [](AsyncWebServerRequest *request) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"pwm\":%d}", (int)pwm);
+    request->send(200, "application/json", buf);
+  });
+
+  // API POST PWM
+  server.on("/api/pwm", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("value", true)) {
+      pwm = constrain(
+        request->getParam("value", true)->value().toFloat(),
+        1,
+        PWM_RANGE
+      );
+      setLedValue(pwm);
+    }
+    request->send(200, "text/plain", "OK");
+  });
+  
+  // API POST SAVE
+  server.on("/api/save", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // save pwm in EEPROM
+    EEPROM.put(EEPROM_ADDR, int(pwm));
+    EEPROM.commit();
+    // flash twice to indicate its saved
+    flashLed(2, 200);
+    #if USE_SERIAL
+      Serial.println("PWM value saved in EEPROM");
+    #endif
+
+    request->send(200, "text/plain", "PWM sauvegardé !");
+  });
+}
+
+
+#if USE_OTA 
+void enableOTA() {
+  if (otaEnabled || !wifiConnected) return;
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+
+  otaEnabled = true;
+  #if USE_SERIAL
+  Serial.println("OTA enabled");
+  #endif
+}
+#endif
+
 
 
 void setup() {
@@ -72,7 +250,36 @@ void setup() {
     Serial.println(pwm);
   #endif
 
-  
+  bool spiffsOK = SPIFFS.begin();
+
+  if (!spiffsOK) {
+    #if USE_SERIAL
+      Serial.println("SPIFFS mount FAILED");
+    #endif
+  } else {
+    #if USE_SERIAL
+      Serial.println("SPIFFS mounted");
+      for(int i=0; i<3; i++) {
+        Serial.print("Check file ");
+        Serial.print(filesToCheck[i]);
+        Serial.print(" ...... ");
+        if (SPIFFS.exists(filesToCheck[i])) {
+          Serial.println("found !");
+        }
+        else {
+          Serial.println("missing !");
+        }
+    }
+    #endif
+    setupWebServer();
+  }
+
+  #if USE_SERIAL
+  Serial.print("Free heap: ");
+  Serial.println(ESP.getFreeHeap());
+  #endif
+
+  handleWifi(true);
 }
 
 
@@ -154,8 +361,10 @@ void loop() {
     }
     // handle long press
     if(btnPressedDuration > BTN_LONG_PRESS) {
-      // if wifi connected, start OTA
-
+      #if USE_OTA 
+        // if wifi connected, start OTA
+        enableOTA();
+      #endif
       // flash three times to indicate its ready for OTA
       flashLed(3, 200);
       #if USE_SERIAL
@@ -165,7 +374,7 @@ void loop() {
   }
   lastBtn = newBtn;
 
-
+  // handle led flashes
   if(lightOffT0 > 0) {
     float ledVal = nbTransitions%2 == 1? 0.f : pwm;
     setLedValue(ledVal);
@@ -183,5 +392,18 @@ void loop() {
     }
   }
 
-  delay(2);
+  handleWifi();
+
+  if (wifiConnected) {
+    if(mdnsStarted) {
+      MDNS.update();
+    }
+    #if USE_OTA 
+      if (otaEnabled) {
+        ArduinoOTA.handle();
+      }
+    #endif
+  }
+
+  yield();
 }
