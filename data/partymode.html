@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Party Mode</title>
+
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    color: white;
+    text-align: center;
+    background:
+      radial-gradient(circle at 20% 30%, #ff00cc, transparent 40%),
+      radial-gradient(circle at 80% 20%, #00ffff, transparent 40%),
+      radial-gradient(circle at 50% 80%, #ffff00, transparent 40%),
+      linear-gradient(135deg, #1a002b, #000000);
+    height: 100vh;
+  }
+
+  h1 {
+    margin-top: 30px;
+    text-shadow: 0 0 15px #ff00ff;
+  }
+
+  .container {
+    margin: 30px auto;
+    width: 80%;
+    max-width: 420px;
+    background: rgba(0,0,0,0.45);
+    padding: 25px;
+    border-radius: 18px;
+    box-shadow: 0 0 25px rgba(255,255,255,0.2);
+  }
+
+  /* === PARTY BUTTON === */
+  .party-btn {
+    width: 100%;
+    padding: 18px;
+    font-size: 22px;
+    font-weight: bold;
+    border-radius: 14px;
+    border: none;
+    cursor: pointer;
+    margin-bottom: 30px;
+    transition: 0.2s;
+  }
+
+  .party-off {
+    background: #550000;
+    color: #ff6666;
+    box-shadow: 0 0 15px rgba(255,0,0,0.4);
+  }
+
+  .party-on {
+    background: #004d33;
+    color: #00ffcc;
+    box-shadow: 0 0 25px rgba(0,255,200,0.8);
+  }
+
+  .party-btn:hover {
+    transform: scale(1.03);
+  }
+
+  label {
+    font-size: 18px;
+  }
+
+  input[type=range] {
+    width: 100%;
+  }
+
+  .value {
+    font-size: 22px;
+    margin-top: 8px;
+    color: #00ffff;
+  }
+</style>
+</head>
+
+<body>
+
+<h1>🎉 PARTY MODE 🎉</h1>
+
+<div class="container">
+
+  <!-- Bouton ON / OFF -->
+  <button id="partyBtn" class="party-btn party-off">
+    ▶ PARTY MODE OFF
+  </button>
+
+  <!-- Fréquence -->
+  <label>Fréquence (Hz)</label>
+  <input id="freq" type="range" min="1" max="20" step="1" value="5">
+  <div class="value"><span id="freqVal">5</span> Hz</div>
+
+  <!-- Pulse -->
+  <label>Pulse (ms)</label>
+  <input id="pulse" type="range" min="1" max="15" step="1" value="5">
+  <div class="value"><span id="pulseVal">5</span> ms</div>
+
+</div>
+
+<script>
+let partyEnabled = false;
+
+const btn = document.getElementById("partyBtn");
+const freq = document.getElementById("freq");
+const pulse = document.getElementById("pulse");
+
+const freqVal = document.getElementById("freqVal");
+const pulseVal = document.getElementById("pulseVal");
+
+function updateButton() {
+  if (partyEnabled) {
+    btn.textContent = "⏹ PARTY MODE ON";
+    btn.classList.remove("party-off");
+    btn.classList.add("party-on");
+  } else {
+    btn.textContent = "▶ PARTY MODE OFF";
+    btn.classList.remove("party-on");
+    btn.classList.add("party-off");
+  }
+}
+
+function sendPartyParams() {
+  fetch(`/party?enable=${partyEnabled ? 1 : 0}&freq=${freq.value}&pulse=${pulse.value}`)
+    .catch(() => {});
+}
+
+btn.onclick = () => {
+  partyEnabled = !partyEnabled;
+  updateButton();
+  sendPartyParams();
+};
+
+freq.oninput = () => {
+  freqVal.textContent = freq.value;
+  sendPartyParams();
+};
+
+pulse.oninput = () => {
+  pulseVal.textContent = pulse.value;
+  sendPartyParams();
+};
+
+// Init
+updateButton();
+sendPartyParams();
+</script>
+
+</body>
+</html>

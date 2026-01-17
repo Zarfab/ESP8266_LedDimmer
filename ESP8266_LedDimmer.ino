@@ -18,7 +18,11 @@ const char* pwd = WIFI_PASS;
 #define ENC_A D5
 #define ENC_B D6
 #define BTN D7
-#define LED D2
+#if USE_SERIAL
+  #define LED LED_BUILTIN
+#else
+   #define LED D2
+#endif
 #define PWM_RANGE 2048
 #define PWM_VAR 0.08
 
@@ -64,6 +68,10 @@ const char * filesToCheck[] = {"/index.html", "/script.js", "/style.css"};
 
 uint32_t lastWifiAttempt = 0;
 uint32_t wifiConnectingT0 = 0;
+
+uint8_t partyFreqHz = 5;    // 1–20 Hz
+uint8_t partyPulseMs = 5;   // 1–15 ms
+bool partyModeEnabled = false;
 
 
 void handleWifi(bool force = false) {
@@ -122,7 +130,7 @@ void setupWebServer() {
   server.serveStatic("/script.js", SPIFFS, "/script.js");
   server.serveStatic("/style.css", SPIFFS, "/style.css");
   server.serveStatic("/debug.html", SPIFFS, "/debug.html");
-  server.serveStatic("/debug.js", SPIFFS, "/debug.js");
+  server.serveStatic("/partymode.html", SPIFFS, "/partymode.html");
 
   // API GET PWM
   server.on("/api/pwm", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -160,21 +168,66 @@ void setupWebServer() {
 
   // DEBUG
   server.on("/debug", HTTP_GET, [](AsyncWebServerRequest *request) {
-  String json = "{";
+    String json = "{";
 
-  json += "\"heap_free\":" + String(ESP.getFreeHeap()) + ",";
-  json += "\"uptime_ms\":" + String(millis()) + ",";
-  json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
-  json += "\"mac\":\"" + WiFi.macAddress() + "\",";
-  json += "\"rssi_dbm\":" + String(WiFi.RSSI()) + ",";
-  json += "\"cpu_freq_mhz\":" + String(ESP.getCpuFreqMHz()) + ",";
-  json += "\"sdk\":\"" + String(ESP.getSdkVersion()) + "\",";
-  json += "\"reset_reason\":\"" + ESP.getResetReason() + "\",";
-  json += "\"pwm\":" + String(int(pwm));
-  json += "}";
+    json += "\"heap_free\":" + String(ESP.getFreeHeap()) + ",";
+    json += "\"uptime_ms\":" + String(millis()) + ",";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"mac\":\"" + WiFi.macAddress() + "\",";
+    json += "\"rssi_dbm\":" + String(WiFi.RSSI()) + ",";
+    json += "\"cpu_freq_mhz\":" + String(ESP.getCpuFreqMHz()) + ",";
+    json += "\"sdk\":\"" + String(ESP.getSdkVersion()) + "\",";
+    json += "\"reset_reason\":\"" + ESP.getResetReason() + "\",";
+    json += "\"pwm\":" + String(int(pwm));
+    json += "}";
 
-  request->send(200, "application/json", json);
-});
+    request->send(200, "application/json", json);
+  });
+
+  server.on("/party", HTTP_GET, [](AsyncWebServerRequest *request) {
+     if (request->hasParam("enable")) {
+      partyModeEnabled = request->getParam("enable")->value().toInt() == 1;
+    }
+    if (request->hasParam("freq")) {
+      partyFreqHz = constrain(
+        request->getParam("freq")->value().toInt(),
+        1, 20
+      );
+    }
+    if (request->hasParam("pulse")) {
+      partyPulseMs = constrain(
+        request->getParam("pulse")->value().toInt(),
+        1, 15
+      );
+    }
+
+    #if USE_SERIAL
+      Serial.printf(
+        "Party: %s | freq=%d Hz | pulse=%d ms\n",
+        partyModeEnabled ? "ON" : "OFF",
+        partyFreqHz,
+        partyPulseMs
+      );
+    #endif
+
+    request->send(200, "text/plain", "OK");
+  });
+}
+
+void handlePartyMode() {
+  static uint32_t lastToggle = 0;
+  static bool ledOn = false;
+
+  if (!partyModeEnabled) return;
+
+  uint32_t periodMs = 1000 / partyFreqHz;
+
+  if (millis() - lastToggle >= (ledOn ? partyPulseMs : periodMs - partyPulseMs)) {
+    lastToggle = millis();
+    ledOn = !ledOn;
+
+    setLedValue(ledOn ? PWM_RANGE : 0);
+  }
 }
 
 
@@ -344,6 +397,8 @@ void loop() {
       }
     }
   }
+
+  handlePartyMode();
 
   if(connectToWifi)
     handleWifi();
