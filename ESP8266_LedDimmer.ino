@@ -187,6 +187,8 @@ void setupWebServer() {
   server.on("/party", HTTP_GET, [](AsyncWebServerRequest *request) {
      if (request->hasParam("enable")) {
       partyModeEnabled = request->getParam("enable")->value().toInt() == 1;
+      if(!partyModeEnabled) 
+        setLedValue(pwm);
     }
     if (request->hasParam("freq")) {
       partyFreqHz = constrain(
