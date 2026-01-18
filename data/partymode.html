@@ -130,6 +130,7 @@ function sendPartyParams() {
 
 btn.onclick = () => {
   partyEnabled = !partyEnabled;
+  setPartyMode(partyEnabled);
   updateButton();
   sendPartyParams();
 };
@@ -144,9 +145,39 @@ pulse.oninput = () => {
   sendPartyParams();
 };
 
+let keepAliveTimer = null;
+
+function startKeepAlive() {
+  stopKeepAlive();
+  keepAliveTimer = setInterval(() => {
+    fetch("/party?keepalive=1").catch(() => {});
+  }, 800);
+}
+
+function setPartyMode(enabled) {
+  if (enabled) startKeepAlive();
+  else stopKeepAlive();
+}
+
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
+
+window.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopKeepAlive();
+	partyEnabled = false;
+	updateButton();
+  }
+});
+
 // Init
 updateButton();
 sendPartyParams();
+
 </script>
 
 </body>

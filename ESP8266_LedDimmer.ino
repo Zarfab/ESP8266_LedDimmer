@@ -27,8 +27,10 @@ const char* pwd = WIFI_PASS;
 #define PWM_VAR 0.08
 
 
-#define BTN_LONG_PRESS 5000 // in ms
-#define BTN_SHORT_PRESS 1000 // in ms
+#define BTN_LONG_PRESS 3000 // in ms
+#define BTN_SHORT_PRESS 500 // in ms
+
+#define PARTY_WATCHDOG_TIMEOUT 1000
 
 float pwm = 0;
 int lastA;
@@ -72,6 +74,7 @@ uint32_t wifiConnectingT0 = 0;
 uint8_t partyFreqHz = 5;    // 1–20 Hz
 uint8_t partyPulseMs = 5;   // 1–15 ms
 bool partyModeEnabled = false;
+uint32_t lastKeepAlive = 0;
 
 
 void handleWifi(bool force = false) {
@@ -116,6 +119,7 @@ void handleWifi(bool force = false) {
         Serial.println("Async WebServer started");
       #endif
     }
+    flashLed(3, 200);
   }
 }
 
@@ -187,8 +191,15 @@ void setupWebServer() {
   server.on("/party", HTTP_GET, [](AsyncWebServerRequest *request) {
      if (request->hasParam("enable")) {
       partyModeEnabled = request->getParam("enable")->value().toInt() == 1;
-      if(!partyModeEnabled) 
+      if(!partyModeEnabled) {
         setLedValue(pwm);
+      }
+      else {
+        lastKeepAlive = millis();
+      }
+    }
+    if (request->hasParam("keepalive")) {
+      lastKeepAlive = millis();
     }
     if (request->hasParam("freq")) {
       partyFreqHz = constrain(
@@ -221,6 +232,14 @@ void handlePartyMode() {
   static bool ledOn = false;
 
   if (!partyModeEnabled) return;
+  
+  if (millis() - lastKeepAlive > PARTY_WATCHDOG_TIMEOUT) {
+    partyModeEnabled = false;
+    setLedValue(pwm); // retour état normal
+    #if USE_SERIAL
+      Serial.println("Party mode watchdog timeout -> OFF");
+    #endif
+  }
 
   uint32_t periodMs = 1000 / partyFreqHz;
 
@@ -334,7 +353,7 @@ void loop() {
     if(btnPressedDuration > BTN_SHORT_PRESS && !shortPressDone) {
       // switch off light for 200ms
       shortPressDone = true;
-      flashLed(1, 200);
+      flashLed(1, 150);
       #if USE_SERIAL
         Serial.println("Short pressed done, switch off for 200ms");
       #endif
@@ -342,7 +361,7 @@ void loop() {
     if(btnPressedDuration > BTN_LONG_PRESS && !longPressDone) {
       // switch off light for 500ms
       longPressDone = true;
-      flashLed(1, 500);
+      flashLed(1, 300);
       #if USE_SERIAL
         Serial.println("Long pressed done, switch off for 500ms");
       #endif
@@ -373,8 +392,8 @@ void loop() {
     if(btnPressedDuration > BTN_LONG_PRESS) {
       // try to connect to wifi and start server
       connectToWifi = true;
-      // flash three times to indicate its ready for OTA
-      flashLed(3, 200);
+      // flash 2 times to indicate it tries to connect to wifi
+      flashLed(2, 200);
       #if USE_SERIAL
         Serial.println("Try connect to Wifi");
       #endif
